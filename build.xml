@@ -1,0 +1,37 @@
+<project name="socialproxy" default="compile" basedir=".">
+  <description>
+      simple example build file
+  </description>
+  <!-- set global properties for this build -->
+  <!--
+  <property name="src" location="src"/>
+  <property name="build" location="build"/>
+  <property name="dist"  location="dist"/>
+  -->
+
+  <target name="init">
+    <tstamp/>
+    <mkdir dir="classes"/>
+  </target>
+
+  <target name="compile" depends="init" description="compile the source" >
+    <javac srcdir="src" destdir="classes" includeAntRuntime="false">
+      <classpath>
+        <!--pathelement path="libs/commons-io-2.4.jar"/-->
+        <fileset dir="libs" includes="*.jar"/>
+      </classpath>
+    </javac>
+  </target>
+
+  <target name="dist" depends="compile" description="generate the distribution" >
+    <mkdir dir="dist/lib"/>
+    <jar jarfile="dist/lib/socialproxy-${DSTAMP}.jar" basedir="classes">
+      <zipfileset includes="**/*.class" src="libs/commons-io-2.4.jar"/>
+    </jar>
+  </target>
+
+  <target name="clean" description="clean up" >
+    <delete dir="classes"/>
+    <delete dir="dist"/>
+  </target>
+</project>
