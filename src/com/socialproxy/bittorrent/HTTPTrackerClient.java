@@ -5,20 +5,37 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Map;
+import java.util.List;
 import com.turn.ttorrent.bcodec.BDecoder;
 import com.turn.ttorrent.bcodec.BEValue;
 import com.turn.ttorrent.bcodec.InvalidBEncodingException;
 
 public class HTTPTrackerClient
 {
-	public static Response announce (Request req, String url) throws IOException
+	final private static char[] hexArray = "0123456789ABCDEF".toCharArray();
+	public static String encodeURLBytes (byte [] data)
+	{
+		StringBuilder sb = new StringBuilder();
+		for (byte b : data) {
+			char c = (char)(b & 0xff);
+			if ((c >= '0' && c <= '9') ||
+					(c >= 'a' && c <= 'z') ||
+					(c >= 'A' && c <= 'Z'))
+				sb.append(c);
+			else
+				sb.append('%').append(hexArray[c >>> 4]).append(hexArray[c & 0xf]);
+		}
+		return sb.toString();
+	}
+
+	public static TrackerResponse announce (TrackerRequest req, String url) throws IOException
 	{
 		assert url.startsWith("http://");
 
 		StringBuilder sb = new StringBuilder(url);
 		sb.append(url.contains("?") ? "&" : "?");
-		sb.append("info_hash=").append(URLByteEncoder.encode(req.info_hash));
-		sb.append("&peer_id=").append(URLByteEncoder.encode(req.peer_id));
+		sb.append("info_hash=").append(encodeURLBytes(req.info_hash));
+		sb.append("&peer_id=").append(encodeURLBytes(req.peer_id));
 		sb.append("&port=").append(req.port);
 		sb.append("&uploaded=").append(req.uploaded);
 		sb.append("&downloaded=").append(req.downloaded);
@@ -34,10 +51,12 @@ public class HTTPTrackerClient
 		if (req.compact != 0)
 			sb.append("&compact=").append(req.compact - 1);
 
+		System.err.println("URL: " + sb);
 		HttpURLConnection conn = (HttpURLConnection)(new URL(sb.toString()).openConnection());
+		conn.setDoInput(true);
 		InputStream in = conn.getInputStream();
 		BEValue bvalue = BDecoder.bdecode(in);
-		Response rsp = new Response();
+		TrackerResponse rsp = new TrackerResponse();
 		try {
 			Map<String, BEValue> map = bvalue.getMap();
 			if (map.containsKey("interval"))
@@ -55,8 +74,21 @@ public class HTTPTrackerClient
 			if (req.compact == 2 && map.get("peers").getValue() instanceof byte[]) {
 				byte[] data = map.get("peers").getBytes();
 				System.out.println("peers array length = " + data.length);
+			} else if (map.get("peers").getValue() instanceof List) {
+				for (BEValue peer : map.get("peers").getList()) {
+					Map<String, BEValue> peermap = peer.getMap();
+					if (peermap.containsKey("peer id") &&
+							peermap.containsKey("ip") &&
+							peermap.containsKey("port")) {
+						System.out.println(HexEncoding.bytesToHex(peermap.get("peer id").getBytes()) +
+								" " + peermap.get("ip").getString() +
+								" " + peermap.get("port").getInt());
+					} else {
+						System.out.println("unknown peer");
+					}
+				}
 			} else {
-				System.out.println("peers: " + map.get("peers").getList());
+				System.out.println("unknown peers: " + map.get("peers").getValue());
 			}
 		} catch (InvalidBEncodingException x) {
 			x.printStackTrace();
@@ -75,7 +107,7 @@ public class HTTPTrackerClient
 			return;
 		}
 
-		Request req = new Request();
+		TrackerRequest req = new TrackerRequest();
 		req.info_hash = HexEncoding.hexToBytes(args[1]);
 		req.peer_id = HexEncoding.hexToBytes("e5fa44f2b31c1fb553b6021e7360d07d5d91ff5e");
 		req.port = 6009;
@@ -97,32 +129,6 @@ public class HTTPTrackerClient
 			}
 		}
 
-		Response rsp = announce(req, args[0]);
-	}
-
-	public static class Request {
-		public byte [] info_hash;
-		public byte [] peer_id;
-		public String ip; // optional
-		public int port;
-		public long uploaded;
-		public long downloaded;
-		public long left;
-		public String event; // optional
-		public int numwant; // optional. 0: not present
-		public int no_peer_id; // 0: not present; 1: false; 2: true
-		public int compact;    // 0: not present; 1: false, 2: true
-	}
-
-	public static class Response {
-		public String failure; // null if no failure
-		public int interval;
-		public Peer [] peers;
-	}
-
-	public static class Peer {
-		public byte [] id;
-		public String ip;
-		public int port;
+		TrackerResponse rsp = announce(req, args[0]);
 	}
 }

@@ -15,7 +15,7 @@
   </target>
 
   <target name="compile" depends="init" description="compile the source" >
-    <javac srcdir="src" destdir="classes" includeAntRuntime="false">
+    <javac srcdir="src" destdir="classes" includeAntRuntime="false" debug="true">
       <classpath>
         <!--pathelement path="libs/commons-io-2.4.jar"/-->
         <fileset dir="libs" includes="*.jar"/>
