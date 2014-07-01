@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.List;
 import com.turn.ttorrent.bcodec.BDecoder;
@@ -46,10 +47,6 @@ public class HTTPTrackerClient
 			sb.append("&event=").append(req.event);
 		if (req.numwant != 0)
 			sb.append("&numwant=").append(req.numwant);
-		if (req.no_peer_id != 0)
-			sb.append("&no_peer_id=").append(req.no_peer_id - 1);
-		if (req.compact != 0)
-			sb.append("&compact=").append(req.compact - 1);
 
 		System.err.println("URL: " + sb);
 		HttpURLConnection conn = (HttpURLConnection)(new URL(sb.toString()).openConnection());
@@ -64,37 +61,39 @@ public class HTTPTrackerClient
 			// what about "min interval"?
 			if (map.containsKey("failure reason")) {
 				rsp.failure = map.get("failure reason").getString();
-				System.out.println("failure reason: " + rsp.failure);
 				return rsp;
 			}
 			if (!map.containsKey("peers")) {
-				System.err.println("Warning: no peers in response");
+				System.err.println("Warning: no failure or peers in response");
+				rsp.failure = "ERR_BADRSP";
 				return rsp;
 			}
-			if (req.compact == 2 && map.get("peers").getValue() instanceof byte[]) {
-				byte[] data = map.get("peers").getBytes();
-				System.out.println("peers array length = " + data.length);
-			} else if (map.get("peers").getValue() instanceof List) {
-				for (BEValue peer : map.get("peers").getList()) {
-					Map<String, BEValue> peermap = peer.getMap();
-					if (peermap.containsKey("peer id") &&
-							peermap.containsKey("ip") &&
-							peermap.containsKey("port")) {
-						System.out.println(HexEncoding.bytesToHex(peermap.get("peer id").getBytes()) +
-								" " + peermap.get("ip").getString() +
-								" " + peermap.get("port").getInt());
-					} else {
-						System.out.println("unknown peer");
-					}
-				}
-			} else {
-				System.out.println("unknown peers: " + map.get("peers").getValue());
+			if (!(map.get("peers").getValue() instanceof List)) {
+				System.err.println("Warning: peers is not a list");
+				rsp.failure = "ERR_BADRSP";
+				return rsp;
 			}
+			ArrayList<TrackerResponse.Peer> peers = new ArrayList<TrackerResponse.Peer>();
+			for (BEValue peer : map.get("peers").getList()) {
+				Map<String, BEValue> peermap = peer.getMap();
+				if (peermap.containsKey("peer id") &&
+						peermap.containsKey("ip") &&
+						peermap.containsKey("port")) {
+					peers.add(new TrackerResponse.Peer(peermap.get("peer id").getBytes(),
+								peermap.get("ip").getString(),
+								peermap.get("port").getInt()));
+				} else {
+					System.err.println("Warning: bad peer item");
+				}
+			}
+			rsp.peers = new TrackerResponse.Peer[peers.size()];
+			rsp.peers = peers.toArray(rsp.peers);
+			return rsp;
 		} catch (InvalidBEncodingException x) {
 			x.printStackTrace();
-			return null;
+			rsp.failure = "ERR_BADRSP";
+			return rsp;
 		}
-		return null;
 	}
 
 	public static void main (String [] args) throws IOException
@@ -103,7 +102,7 @@ public class HTTPTrackerClient
 			System.out.println("Usage: java com.socialproxy.bittorrent." +
 					"HTTPTrackerClient url info_hash [name=value ...]");
 			System.out.println("Required Parameters: peer_id port uploaded downloaded left");
-			System.out.println("Optional Parameters: ip event numwant no_peer_id compact");
+			System.out.println("Optional Parameters: ip event numwant");
 			return;
 		}
 
@@ -123,12 +122,21 @@ public class HTTPTrackerClient
 				case "left": req.left = Long.parseLong(arr[1]); break;
 				case "event": req.event = arr[1]; break;
 				case "numwant": req.numwant = Integer.parseInt(arr[1]); break;
-				case "no_peer_id": req.no_peer_id = Integer.parseInt(arr[1]) + 1; break;
-				case "compact": req.compact = Integer.parseInt(arr[1]) + 1; break;
 				default: throw new RuntimeException("Unknown parameter " + args[i]);
 			}
 		}
 
 		TrackerResponse rsp = announce(req, args[0]);
+		if (rsp.failure != null) {
+			System.out.println("Announce Error: " + rsp.failure);
+			return;
+		}
+
+		System.out.println("interval: " + rsp.interval);
+		System.out.println("leechers: " + rsp.leechers);
+		System.out.println("seeders: " + rsp.seeders);
+		System.out.println("peers:");
+		for (TrackerResponse.Peer peer : rsp.peers)
+			System.out.println(HexEncoding.bytesToHex(peer.id) + " " + peer.ip + " " + peer.port);
 	}
 }

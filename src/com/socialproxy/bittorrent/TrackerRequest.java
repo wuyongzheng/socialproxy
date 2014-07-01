@@ -10,8 +10,6 @@ public class TrackerRequest {
 	public long left;
 	public String event; // optional
 	public int numwant; // optional. 0: not present
-	public int no_peer_id; // 0: not present; 1: false; 2: true
-	public int compact;    // 0: not present; 1: false, 2: true
 
 	public TrackerRequest () {}
 
@@ -27,8 +25,6 @@ public class TrackerRequest {
 		this.left = left;
 		this.event = null;
 		this.numwant = 0;
-		this.no_peer_id = 0;
-		this.compact = 0;
 	}
 }
 
