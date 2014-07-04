@@ -1,5 +1,6 @@
 package com.socialproxy.util;
 
+/* CircularByteBuffer is not thread safe. */
 public final class CircularByteBuffer
 {
 	private final byte [] buffer;
@@ -9,6 +10,7 @@ public final class CircularByteBuffer
 	public CircularByteBuffer (int capacity)
 	{
 		buffer = new byte [capacity];
+		ptr = used = 0;
 	}
 
 	public int getUsed () {return used;}
@@ -16,7 +18,7 @@ public final class CircularByteBuffer
 	public boolean isEmpty () {return used == 0;}
 	public boolean isFull () {return buffer.length == used;}
 
-	public synchronized int get ()
+	public int get ()
 	{
 		if (used == 0)
 			throw new ArrayIndexOutOfBoundsException();
@@ -26,20 +28,32 @@ public final class CircularByteBuffer
 		return retval;
 	}
 
-	public synchronized int get (byte[] out, int offset, int size)
+	public int get (byte[] out, int offset, int size)
 	{
 		if (size <= 0 || used == 0)
 			return 0;
-		//TODO: use array copy
-		int origsize = size;
-		while (used > 0 && size > 0) {
-			out[offset ++] = (byte)get();
-			size --;
-		}
-		return origsize - size;
+
+		if (size > used)
+			size = used;
+		int tocopy = buffer.length - ptr < size ? buffer.length - ptr : size;
+		System.arraycopy(buffer, ptr, out, offset, tocopy);
+		ptr = (ptr + tocopy) % buffer.length;
+		used -= tocopy;
+		offset += tocopy;
+		size -= tocopy;
+
+		if (size == 0)
+			return tocopy;
+
+		assert used >= size;
+		assert ptr == 0;
+		System.arraycopy(buffer, 0, out, offset, size);
+		ptr += size;
+		used -= size;
+		return tocopy + size;
 	}
 
-	public synchronized void put (byte b)
+	public void put (byte b)
 	{
 		if (buffer.length == used)
 			throw new ArrayIndexOutOfBoundsException();
@@ -47,16 +61,29 @@ public final class CircularByteBuffer
 		used ++;
 	}
 
-	public synchronized int put (byte[] in, int offset, int size)
+	public int put (byte[] in, int offset, int size)
 	{
 		if (size <= 0 || buffer.length == used)
 			return 0;
-		//TODO: use array copy
-		int origsize = size;
-		while (size > 0 && used < buffer.length) {
-			put(in[offset ++]);
-			size --;
-		}
-		return origsize - size;
+
+		//System.out.printf("offset=%d, size=%d, cap=%d, ptr=%d, used=%d\n",
+		//		offset, size, buffer.length, ptr, used);
+		if (size > buffer.length - used)
+			size = buffer.length - used;
+		int tocopy = buffer.length - (ptr + used) % buffer.length;
+		tocopy = tocopy < size ? tocopy : size;
+		System.arraycopy(in, offset, buffer, (ptr + used) % buffer.length, tocopy);
+		used += tocopy;
+		offset += tocopy;
+		size -= tocopy;
+
+		if (size == 0)
+			return tocopy;
+
+		assert buffer.length - used >= size;
+		assert ptr + used == buffer.length;
+		System.arraycopy(in, offset, buffer, 0, size);
+		used += size;
+		return tocopy + size;
 	}
 }
