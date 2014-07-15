@@ -1,127 +1,218 @@
 package com.socialproxy.tunnel;
 
-import java.io.OutputStream;
-import java.io.InputStream;
+//import java.io.OutputStream;
+//import java.io.InputStream;
 import java.io.IOException;
-import java.io.Closeable;
+import java.nio.channels.Selector;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.SocketChannel;
+import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Logger;
 import com.socialproxy.util.CircularByteBuffer;
 
-public class TChannel implements Closeable
+/* TChannel is responsible for relaying traffic between a connected local
+ * socket and the carrier */
+public class TChannel implements Runnable
 {
-	//public static final int 
+	private final static Logger LOG = Logger.getLogger(TChannel.class.getName());
 	private final Carrier carrier;
-	private final int carrierSlot;
-	boolean closed;
-	final CircularByteBuffer muxbuf = new CircularByteBuffer(1500);
-	final CircularByteBuffer dembuf = new CircularByteBuffer(1500);
-	final IStream input = new IStream();
-	final OStream output = new OStream();
+	private final int channelID;
+	private final ByteBuffer         sendbuf; // from local socket to carrier
+	private final CircularByteBuffer recvbuf; // from carrier to local socket
+	private final SocketChannel socket;
+	private boolean closed = false;
+	private final Selector selector;
 
-	public TChannel (Carrier carrier, int carrierSlot)
+	/* myUnsendAck: number of bytes that has not been acked to the peer.
+	 * initially = 0
+	 * increase when local socket consumes data
+	 * decrease when sending ack
+	 * always 0 <= myUnsendAck <= my recvbuf size */
+	private final AtomicInteger myUnsendAck;
+
+	/* peerFreeRecvbuf: number of bytes that is free in peer's receiving buffer.
+	 * i.e. size of data that we can send.
+	 * initially = peer recvbuf size
+	 * increase when we receive ack
+	 * decrease when we send data (put data to sendbuf)
+	 * always: 0 <= peerFreeRecvbuf <= peer recvbuf size */
+	private final AtomicInteger peerFreeRecvbuf;
+
+	public TChannel (Carrier carrier, int channelID,
+			int sendbufSize, int recvbufSize, int peerRecvbufSize,
+			SocketChannel socket)
 	{
 		this.carrier = carrier;
-		this.carrierSlot = carrierSlot;
+		this.channelID = channelID;
+		sendbuf = ByteBuffer.allocate(sendbufSize);
+		recvbuf = new CircularByteBuffer(recvbufSize);
+		this.socket = socket;
+		try {
+			selector = Selector.open();
+		} catch (IOException x) {
+			throw new RuntimeException(x);
+		}
+
+		myUnsendAck = new AtomicInteger(0);
+		peerFreeRecvbuf = new AtomicInteger(peerRecvbufSize);
+		LOG.fine("TChannel()");
 	}
 
-	public void close () throws IOException
+	/* called by carrier when it receives TRDN */
+	public void onTRDN ()
 	{
+		LOG.fine("onTRDN()");
 		closed = true;
-		synchronized (muxbuf) {muxbuf.notify();}
-		synchronized (dembuf) {dembuf.notify();}
+		selector.wakeup();
 	}
 
-	public InputStream getInputStream () {return input;}
-	public OutputStream getOutputStream () {return output;}
-
-	class IStream extends InputStream {
-		@Override
-		public int read () throws IOException
-		{
-			if (closed)
-				return -1;
-			synchronized (dembuf) {
-				while (dembuf.isEmpty() && !closed)
-					try {dembuf.wait();} catch (InterruptedException x) {};
-				if (closed)
-					return -1;
-				int retval = dembuf.get();
-				dembuf.notify();
-				return retval;
+	/* called by carrier when it receives DATA
+	 * ack is in bytes
+	 * return true on success
+	 * return false if protocol error. e.g. overflow */
+	public boolean onDATA (byte [] data, int offset, int size, int ack)
+	{
+		assert size > 0;
+		assert ack >= 0;
+		boolean retval;
+		synchronized (recvbuf) {
+			// the ack mechanism guarantees recvbuf has enough free space
+			if (recvbuf.getFree() < size) {
+				LOG.warning("recvbuf.getFree()=" + recvbuf.getFree() + " < datasize=" + size);
+				closed = true;
+				retval = false;
+			} else {
+				int putsize = recvbuf.put(data, offset, size);
+				assert putsize == size;
+				LOG.finer("onDATA(size=" + size + ") " +
+						"new recvbuf:" + recvbuf.getUsed() +
+						"u/" + recvbuf.getFree() + "f");
+				retval = true;
 			}
 		}
+		if (ack > 0) {
+			int newvalue = peerFreeRecvbuf.addAndGet(ack);
+			LOG.finer("onDATA() ack=" + ack + ", new peerFreeRecvbuf=" + newvalue);
+		}
+		selector.wakeup();
+		return retval;
+	}
 
-		@Override
-		public int read (byte[] b, int off, int len) throws IOException
-		{
-			if (len <= 0)
+	/* called by carrier when it receives ack. in bytes */
+	public void onAck (int ack)
+	{
+		assert ack > 0;
+		int newvalue = peerFreeRecvbuf.addAndGet(ack);
+		LOG.finer("onAck() ack=" + ack + ", new peerFreeRecvbuf=" + newvalue);
+		selector.wakeup();
+	}
+
+	/* return bytes transfered to dst.
+	 * dst should have enough space. */
+	public int sendToCarrier (ByteBuffer dst)
+	{
+		int size;
+		synchronized (sendbuf) {
+			if (sendbuf.position() == 0)
 				return 0;
-			if (closed)
-				return -1;
-			synchronized (dembuf) {
-				while (dembuf.isEmpty() && !closed)
-					try {dembuf.wait();} catch (InterruptedException x) {};
-				if (closed)
-					return -1;
-				int retval = dembuf.get(b, off, len);
-				dembuf.notify();
-				return retval;
-			}
+			sendbuf.flip();
+			dst.put(sendbuf);
+			size = sendbuf.position();
+			sendbuf.compact();
 		}
-
-		//@Override public long skip (long n) throws IOException {}
-
-		@Override
-		public int available () throws IOException
-		{
-			return dembuf.getUsed();
-		}
-
-		@Override
-		public void close () throws IOException
-		{
-			TChannel.this.close();
-		}
+		LOG.finer("sendToCarrier() return " + size);
+		return size;
 	}
 
-	class OStream extends OutputStream {
-		@Override
-		public void write (int b) throws IOException
-		{
-			if (closed)
-				throw new IOException("write to closed OStream");
-			synchronized (muxbuf) {
-				while (muxbuf.isFull() && !closed)
-					try {muxbuf.wait();} catch (InterruptedException x) {};
-				if (closed)
-					throw new IOException("write to closed OStream");
-				muxbuf.put((byte)b);
-				muxbuf.notify();
-			}
-		}
+	/* return ack in ACK_UNIT bytes */
+	public int sendAckToCarrier ()
+	{
+		int oldval;
+		int decrement;
+		do {
+			oldval = myUnsendAck.get();
+			assert oldval >= 0;
+			decrement = (oldval / Carrier.ACK_UNIT) * Carrier.ACK_UNIT;
+			if (decrement == 0) break;
+			if (decrement > Carrier.MAX_ACK) decrement = Carrier.MAX_ACK;
+		} while (!myUnsendAck.compareAndSet(oldval, oldval - decrement));
+		LOG.finer("sendAckToCarrier() oldval=" + oldval + ", decrement=" + decrement);
+		return decrement / Carrier.ACK_UNIT;
+	}
 
-		@Override
-		public void write (byte[] b, int off, int len) throws IOException
-		{
-			if (closed)
-				throw new IOException("write to closed OStream");
-			synchronized (muxbuf) {
-				while (len > 0) {
-					while (muxbuf.isFull() && !closed)
-						try {muxbuf.wait();} catch (InterruptedException x) {};
-					if (closed)
-						throw new IOException("write to closed OStream");
-					int putlen = muxbuf.put(b, off, len);
-					off += putlen;
-					len -= putlen;
-					muxbuf.notify();
+	private void runInternal () throws Exception
+	{
+		socket.configureBlocking(false);
+		SelectionKey selkey = socket.register(selector, 0);
+		while (true) {
+			int selops = 0;
+			if (peerFreeRecvbuf.get() > 0 && sendbuf.hasRemaining())
+				selops |= SelectionKey.OP_READ;
+			if (!recvbuf.isEmpty())
+				selops |= SelectionKey.OP_WRITE;
+			selkey.interestOps(selops);
+			LOG.finer("selecting: " +
+					((selops & SelectionKey.OP_READ) == 0 ? "" : "r") +
+					((selops & SelectionKey.OP_WRITE) == 0 ? "" : "w"));
+			selector.select();
+			LOG.finer("selected: " +
+					(closed ? "" : "c") +
+					(selkey.isReadable() ? "r" : "") +
+					(selkey.isWritable() ? "w" : ""));
+			if (closed) {
+				socket.close();
+				selector.close();
+				break;
+			}
+			if (selkey.isReadable()) {
+				assert peerFreeRecvbuf.get() > 0;
+				int size = 0;
+				synchronized (sendbuf) {
+					if (sendbuf.hasRemaining()) {
+						// has to limit the bytes received from socket by peerFreeRecvbuf
+						int remaining = peerFreeRecvbuf.get();
+						if (sendbuf.remaining() > remaining)
+							sendbuf.limit(sendbuf.position() + remaining);
+						size = socket.read(sendbuf);
+						sendbuf.limit(sendbuf.capacity());
+					}
+				}
+				if (size == -1) {
+					carrier.channelClose(channelID);
+					socket.close();
+					selector.close();
+					break;
+				} else if (size > 0) {
+					int newvalue = peerFreeRecvbuf.addAndGet(-size);
+					assert newvalue >= 0;
+					carrier.channelSend(channelID);
+				}
+			}
+			if (selkey.isWritable()) {
+				int size = 0;
+				synchronized (recvbuf) {
+					if (!recvbuf.isEmpty())
+						size = recvbuf.get(socket, -1);
+				}
+				assert size >= 0;
+				if (size > 0) {
+					int newval = myUnsendAck.addAndGet(size);
+					// keep silent if recvbuf is %95 free
+					if (newval >= Carrier.ACK_UNIT && newval >= recvbuf.getSize() / 20)
+						carrier.channelSendAck(channelID);
 				}
 			}
 		}
+	}
 
-		@Override
-		public void close () throws IOException
-		{
-			TChannel.this.close();
+	@Override
+	public void run ()
+	{
+		try {
+			runInternal();
+		} catch (Exception x) {
+			throw new RuntimeException(x);
 		}
 	}
 }

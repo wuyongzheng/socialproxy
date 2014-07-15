@@ -1,11 +1,17 @@
 package com.socialproxy.util;
 
+import java.nio.ByteBuffer;
+import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.WritableByteChannel;
+import java.io.IOException;
+
 /* CircularByteBuffer is not thread safe. */
 public final class CircularByteBuffer
 {
 	private final byte [] buffer;
 	private int ptr;
 	private int used;
+	private ByteBuffer bytebuf = null;
 
 	public CircularByteBuffer (int capacity)
 	{
@@ -13,6 +19,7 @@ public final class CircularByteBuffer
 		ptr = used = 0;
 	}
 
+	public int getSize () {return buffer.length;}
 	public int getUsed () {return used;}
 	public int getFree () {return buffer.length - used;}
 	public boolean isEmpty () {return used == 0;}
@@ -53,6 +60,35 @@ public final class CircularByteBuffer
 		return tocopy + size;
 	}
 
+	public int get (WritableByteChannel channel, int limit) throws IOException
+	{
+		if (bytebuf == null)
+			bytebuf = ByteBuffer.wrap(buffer);
+
+		if (limit <= 0 || used == 0)
+			return 0;
+		if (limit > used)
+			limit = used;
+		int tosend = buffer.length - ptr < limit ? buffer.length - ptr : limit;
+		bytebuf.limit(ptr + tosend).position(ptr);
+		int sent = channel.write(bytebuf);
+		assert sent >= 0;
+		assert sent <= tosend;
+		ptr = (ptr + sent) % buffer.length;
+		used -= sent;
+		limit -= sent;
+		if (sent < tosend || limit == 0)
+			return sent;
+
+		assert used >= limit;
+		assert ptr == 0;
+		bytebuf.limit(limit).position(0);
+		sent = channel.write(bytebuf);
+		ptr += sent;
+		used -= sent;
+		return tosend + sent;
+	}
+
 	public void put (byte b)
 	{
 		if (buffer.length == used)
@@ -85,5 +121,10 @@ public final class CircularByteBuffer
 		System.arraycopy(in, offset, buffer, 0, size);
 		used += size;
 		return tocopy + size;
+	}
+
+	public int put (ReadableByteChannel channel, int limit) throws IOException
+	{
+		throw new UnsupportedOperationException("put(channel) not implemented");
 	}
 }

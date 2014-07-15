@@ -35,7 +35,7 @@ K_s1: sha1(K_s,"session-auth")
    B -> A: {Nb, sha1(K_pa)} K_s1
    If they do TCP simultaneous open, step 2 and 4 happens simultaneously.
 5. A do the same as Step 3.
-6. The Following traffic from A to B is encrypted using CFB AES as a stream
+6. The Following traffic from A to B is encrypted using CTR AES as a stream
    cypher with key sha1(Na,Nb) and iv 0
 7. The other direction should use key sha1(Nb,Na)
 
@@ -62,18 +62,18 @@ synchronization. All integers are in network byte order.
           To prevent two peers choose the same ID simultaneously, The peer with
           smaller public key can only choose ID in the range [1, 63].  The
           other can only choose [64, 126].
-    3(1): GTG
-    4(1): target type
+    3(2): initial buffer size in 256 bytes
+    5(1): target type
           0: ipv4 addr, N=2+4
           1: ipv6 addr, N=2+16
           2: hostname, N=2+1+strlen(hostname)
           3: web proxy, N=0
-    5(N): target addr, depends on target type
+    6(N): target addr, depends on target type
           for 0: port(2), ipv4 addr(4)
           for 1: port(2), ipv6 addr(16)
           for 2: port(2), strlen(hostname)(1), hostname(strlen(hostname))
           for 3: none
-    5+N
+    6+N
 * CON2 Connect Response
     0(1): 0, means command
     1(1): 1, means connect response
@@ -82,19 +82,19 @@ synchronization. All integers are in network byte order.
           0 means connected
           1 means target not allowed or invalid CON1 message
           2 means connection failed
-    4(2): GTG (ommited if not connected)
+    4(2): initial buffer size (ommited if not connected)
     6
 * DATA Channel Message
     0(1): The most significant bit:
-            0: GTG only, no data
-            1: GTG+data
-          The rest is channel ID
-    1(2): GTG
-    3(2): data size N (ommited if there is no data)
+            0: ack only, no data
+            1: ack+data
+          The rest is channel ID. 1 <= channel ID <= 126
+    1(1): ack size in 256 bytes
+    2(2): data size N (ommited if there is no data)
           For ease of programming, we limit the size of all messages to 2000
-          bytes, so max(N)=1995.
-    5(N): data
-    5+N
+          bytes, so max(N)=1996.
+    4(N): data
+    4+N
 * TRDN Channel Teardown
     0(1): 0, means command
     1(1): 2, means teardown
@@ -108,8 +108,8 @@ synchronization. All integers are in network byte order.
 * PADD Padding. Used to prevent packet size analysis
     0(1): 0, means command
     1(1): 5, means padding
-    2(1): size N
-    3(N): data. ignored
+    2(1): size N. 0 <= N <= 255
+    3(N): data. must be all 0
     3+N
 
 Initially, all channels are in the EMPTY state. Here is a state-event matrix.
@@ -146,19 +146,13 @@ doesn't consume, and the sender keeps sending, the receiver's buffer will be
 full and the whole carrier is congested. In the worst case, a local socket may
 DOS other channels by not consuming any data.
 
-To prevent this, the receiver tells the sender GTG (the size of the data that
-can be sent without overflowing the receiver's buffer) every time the
-receiver's local socket consumes data. When a channel is estblished, two peers
-should tell each other their GTG, which is same as their buffer size. When N
-bytes is consumed, i.e. removed from the buffer, the peer should add N to its
-GTG and advertise.  GTG should never decrease.  We don't need byte-level
-granularity like TCP.  The GTG's unit is 256 bytes.  We use 16 bits GTG in the
-message, the GTG in the message is (N/256)%65536. For example, if the other
-peer's GTG is 17 and the sender has already sent 2000 bytes, the sender can
-send 17*256-2000=2352 bytes.  Like sliding window in TCP, one can easily figure
-out the 64KB overflow when GTG decreases. This design limits the receiving
-buffer size to at most 2^24 bytes. This design also limits the per channel
-throughput to at most buffsize/RTT.
+To prevent this, When a channel is estblished, two peers tell each other their
+receiving buffer size.  When the receiver's local socket consumes data, the
+receiver acks the sender by saying, "Hi, you can send me more data of size N".
+
+We don't need byte-level granularity like TCP.  The ack's unit is 256 bytes.
+For example, if the other peer sends ack 17, it means we can send 4352 more
+bytes.  This design limits the per channel throughput to at most buffsize/RTT.
 
 Speed throttling
 ----
