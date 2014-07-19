@@ -57,7 +57,7 @@ synchronization. All integers are in network byte order.
 
 * CON1 Connect Request
     0(1): 0, means command
-    1(1): 0, means connect request
+    1(1): 1, means connect request
     2(1): new channel ID
           To prevent two peers choose the same ID simultaneously, The peer with
           smaller public key can only choose ID in the range [1, 63].  The
@@ -76,7 +76,7 @@ synchronization. All integers are in network byte order.
     6+N
 * CON2 Connect Response
     0(1): 0, means command
-    1(1): 1, means connect response
+    1(1): 2, means connect response
     2(1): channel ID
     3(1): 0, 1 or 2.
           0 means connected
@@ -97,17 +97,17 @@ synchronization. All integers are in network byte order.
     4+N
 * TRDN Channel Teardown
     0(1): 0, means command
-    1(1): 2, means teardown
+    1(1): 3, means teardown
     2(1): channel ID
 * PING/PONG
     0(1): 0, means command
-    1(1): 3/4, means ping/pong
+    1(1): 4/5, means ping/pong
     2(4): nonce, pong should preserve this
     6(8): timestamp, current time in milliseconds since 1970 UTC
     14
 * PADD Padding. Used to prevent packet size analysis
     0(1): 0, means command
-    1(1): 5, means padding
+    1(1): 6, means padding
     2(1): size N. 0 <= N <= 255
     3(N): data. must be all 0
     3+N

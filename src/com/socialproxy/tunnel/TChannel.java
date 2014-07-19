@@ -69,26 +69,24 @@ public class TChannel implements Runnable
 
 	/* called by carrier when it receives DATA
 	 * ack is in bytes
-	 * return true on success
-	 * return false if protocol error. e.g. overflow */
-	public boolean onDATA (byte [] data, int offset, int size, int ack)
+	 * throw exception if protocol error. e.g. overflow */
+	public void onDATA (byte [] data, int offset, int size, int ack) throws CarrierProtocolException
 	{
 		assert size > 0;
 		assert ack >= 0;
-		boolean retval;
 		synchronized (recvbuf) {
 			// the ack mechanism guarantees recvbuf has enough free space
 			if (recvbuf.getFree() < size) {
 				LOG.warning("recvbuf.getFree()=" + recvbuf.getFree() + " < datasize=" + size);
 				closed = true;
-				retval = false;
+				selector.wakeup();
+				throw new CarrierProtocolException("receive buffer overflow");
 			} else {
 				int putsize = recvbuf.put(data, offset, size);
 				assert putsize == size;
 				LOG.finer("onDATA(size=" + size + ") " +
 						"new recvbuf:" + recvbuf.getUsed() +
 						"u/" + recvbuf.getFree() + "f");
-				retval = true;
 			}
 		}
 		if (ack > 0) {
@@ -96,7 +94,6 @@ public class TChannel implements Runnable
 			LOG.finer("onDATA() ack=" + ack + ", new peerFreeRecvbuf=" + newvalue);
 		}
 		selector.wakeup();
-		return retval;
 	}
 
 	/* called by carrier when it receives ack. in bytes */
