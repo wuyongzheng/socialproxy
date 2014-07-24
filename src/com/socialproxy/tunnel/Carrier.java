@@ -9,9 +9,12 @@ import java.nio.ByteBuffer;
 import java.util.Random;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 import javax.crypto.spec.IvParameterSpec;
+import com.socialproxy.util.Hex;
 
 /* A carrier can carry mutiple tunneled channels.
  * It acts as a multiplexer bewteen multiple channels (frontend)
@@ -21,6 +24,7 @@ import javax.crypto.spec.IvParameterSpec;
  * so the constructor expects the encryption & decryption keys.
  */
 public class Carrier implements Runnable {
+	private static final boolean LOGTRAFFIC = true;
 	public static final int STATE_EMPTY      = 0;
 	public static final int STATE_CONNECTING = 1;
 	public static final int STATE_CONNECTED  = 2;
@@ -39,6 +43,16 @@ public class Carrier implements Runnable {
 	public static final int CHANNEL_SENDBUF_SIZE = MAX_DATASIZE;
 	private static final int SELECT_TIMEOUT_MS = 500; // timeout in needed for speed limit
 	private final static Logger LOG = Logger.getLogger(Carrier.class.getName());
+	private static final Pattern PATTERN_IPV4 = Pattern.compile(
+			"([0-9]+)\\.([0-9]+)\\.([0-9]+)\\.([0-9]+)");
+//			"^([01]?\\d\\d?|2[0-4]\\d|25[0-5])\\." +
+//			"([01]?\\d\\d?|2[0-4]\\d|25[0-5])\\." +
+//			"([01]?\\d\\d?|2[0-4]\\d|25[0-5])\\." +
+//			"([01]?\\d\\d?|2[0-4]\\d|25[0-5])$");
+	private static final Pattern PATTERN_IPV6 = Pattern.compile(
+			"([0-9a-f]{1,4}:){7}([0-9a-f]){1,4}");
+	private static final Pattern PATTERN_DNSNAME = Pattern.compile(
+			"^[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*(\\.[A-Za-z]{2,})$");
 
 	private final SocketChannel backsock;
 	private final boolean isMajor; // minor creates [1, 63]; major creates [64, 126]
@@ -60,7 +74,7 @@ public class Carrier implements Runnable {
 
 		backsock = backend;
 		this.isMajor = isMajor;
-		slots = new Slot[126];
+		slots = new Slot[127];
 		for (int i = 1; i <= 126; i ++)
 			slots[i] = new Slot(i, STATE_EMPTY);
 
@@ -97,7 +111,7 @@ public class Carrier implements Runnable {
 		ByteBuffer tmpbuf = ByteBuffer.allocate(MAX_MESSAGESIZE * 2);
 		while (true) {
 			int selops = sendbuf.position() > 0 ?
-				SelectionKey.OP_READ | SelectionKey.OP_WRITE :
+				(SelectionKey.OP_READ | SelectionKey.OP_WRITE) :
 				SelectionKey.OP_READ;
 			selkey.interestOps(selops);
 			LOG.finer("selecting: " +
@@ -178,11 +192,10 @@ public class Carrier implements Runnable {
 				}
 			}
 
-			if (selkey.isWritable()) {
-				assert sendbuf.position() > 0;
+			if (selkey.isWritable() && sendbuf.position() > 0) {
 				sendbuf.flip();
 				try {
-					int size = backsock.write(tmpbuf);
+					int size = backsock.write(sendbuf);
 					assert size > 0;
 				} catch (IOException x) {
 					throw new RuntimeException(x);
@@ -192,20 +205,70 @@ public class Carrier implements Runnable {
 		}
 	}
 
-	/* can be called in any thread */
-	public void createChannel (SocketChannel socket, String peerAddr, int peerPort)
+	/* can be called in any thread
+	 * return true if succeed
+	 * if return false, caller should close the socket. */
+	public boolean createChannel (SocketChannel socket, String peerAddr, int peerPort)
 	{
-		if (carrierClosed) {
-			try {socket.close();} catch (Exception x) {}
-			return;
+		int addrtype;
+		byte [] addrbytes;
+		if (PATTERN_IPV4.matcher(peerAddr).matches()) {
+			addrtype = 0;
+			Matcher matcher = PATTERN_IPV4.matcher(peerAddr);
+			boolean found = matcher.find();
+			assert found;
+			addrbytes = new byte[4];
+			addrbytes[0] = (byte)Integer.parseInt(matcher.group(1));
+			addrbytes[1] = (byte)Integer.parseInt(matcher.group(2));
+			addrbytes[2] = (byte)Integer.parseInt(matcher.group(3));
+			addrbytes[3] = (byte)Integer.parseInt(matcher.group(4));
+		} else if (PATTERN_IPV6.matcher(peerAddr).matches()) {
+			addrtype = 1;
+			throw new RuntimeException("ipv6 not implemented yet");
+		} else if (PATTERN_DNSNAME.matcher(peerAddr).matches()) {
+			addrtype = 2;
+			addrbytes = new byte[peerAddr.length() + 1];
+			try {
+				System.arraycopy(peerAddr.getBytes("UTF-8"),
+						0, addrbytes, 1, peerAddr.length());
+			} catch (java.io.UnsupportedEncodingException x) {
+				throw new RuntimeException(x);
+			}
+		} else {
+			LOG.warning("unknown address format " + peerAddr);
+			return false;
 		}
-		// TODO choose slot
+
+		if (carrierClosed) {
+			LOG.warning("calling createChannel() while carrierClosed=true");
+			return false;
+		}
+
+		int cid = isMajor ? 64 : 1;
+		while (cid <= (isMajor ? 126 : 63))
+			if (slots[cid].state == STATE_EMPTY)
+				break;
+		if (cid > (isMajor ? 126 : 63)) {
+			LOG.warning("createChannel() channel full");
+			return false;
+		}
+		assert slots[cid].state == STATE_EMPTY;
+		slots[cid].state = STATE_CONNECTING;
+		slots[cid].channel = null;
+		slots[cid].hasAck = slots[cid].hasData = false;
+		slots[cid].socket = socket;
+
 		synchronized (controlSendbuf) {
 			controlSendbuf.put((byte)0);
 			controlSendbuf.put(CTRL_CON1);
-			// TODO
+			controlSendbuf.put((byte)cid);
+			controlSendbuf.putShort((short)(CHANNEL_RECVBUF_SIZE / ACK_UNIT));
+			controlSendbuf.put((byte)addrtype);
+			controlSendbuf.putShort((short)peerPort);
+			controlSendbuf.put(addrbytes);
 		}
 		selector.wakeup();
+		return true;
 	}
 
 	/* can be called in any thread */
@@ -247,9 +310,9 @@ public class Carrier implements Runnable {
 		while (recvbuf.remaining() >= 2) { // minimal message is 2 bytes
 			recvbuf.mark();
 			boolean finished;
-			int cid = recvbuf.get();
+			int cid = recvbuf.get() & 0xff;
 			if (cid == 0) {
-				cid = recvbuf.get();
+				cid = recvbuf.get() & 0xff;
 				switch (cid) {
 					case CTRL_CON1: finished = processCON1(); break;
 					case CTRL_CON2: finished = processCON2(); break;
@@ -267,6 +330,9 @@ public class Carrier implements Runnable {
 				break;
 			}
 		}
+		if (LOGTRAFFIC && recvbuf.position() > 0)
+			LOG.finest("RECV: " + Hex.bytesToString(recvbuf.array(),
+						0, recvbuf.position()));
 	}
 
 	private boolean processDATA (int cid) throws CarrierProtocolException
@@ -475,6 +541,8 @@ public class Carrier implements Runnable {
 		if (!sendbuf.hasRemaining())
 			return;
 
+		int mark = sendbuf.position();
+
 		synchronized (controlSendbuf) {
 			if (controlSendbuf.position() > 0) {
 				controlSendbuf.flip();
@@ -501,6 +569,10 @@ public class Carrier implements Runnable {
 				}
 			}
 		}
+
+		if (LOGTRAFFIC && sendbuf.position() > mark)
+			LOG.finest("SEND: " + Hex.bytesToString(sendbuf.array(),
+						mark, sendbuf.position() - mark));
 
 		while (sendbuf.remaining() >= MAX_MESSAGESIZE && hasAnyData) {
 			int cid = 0;
@@ -531,6 +603,10 @@ public class Carrier implements Runnable {
 			sendbuf.put(position+0, (byte)(128 + cid));
 			sendbuf.put(position+1, (byte)ack);
 			sendbuf.putShort(position+2, (short)(position2 - position - 4));
+			if (LOGTRAFFIC)
+				LOG.finest("SEND DATA " +
+						Hex.bytesToString(sendbuf.array(), position, 4) +
+						" " + (position2 - position - 4));
 		}
 	}
 
@@ -619,7 +695,7 @@ public class Carrier implements Runnable {
 			try {
 				socket = SocketChannel.open(addr);
 			} catch (IOException x) {
-				LOG.warning("error connecting " + hostname + ":" + port + "cid=" + cid);
+				LOG.warning("error connecting " + hostname + ":" + port + " cid=" + cid);
 				assert slots[cid].state == STATE_CONNECTING;
 				slots[cid].state = STATE_EMPTY;
 				synchronized (controlSendbuf) {

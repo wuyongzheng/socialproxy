@@ -100,7 +100,9 @@ public class CarrierTool {
 					LOG.severe("local socket connected before carrier");
 					socket.close();
 				} else {
-					carrier.createChannel(socket, remoteAddr, remotePort);
+					boolean succeed = carrier.createChannel(socket, remoteAddr, remotePort);
+					if (!succeed)
+						socket.close();
 				}
 			}
 		}
