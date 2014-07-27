@@ -62,7 +62,7 @@ synchronization. All integers are in network byte order.
           To prevent two peers choose the same ID simultaneously, The peer with
           smaller public key can only choose ID in the range [1, 63].  The
           other can only choose [64, 126].
-    3(2): initial buffer size in 256 bytes
+    3(2): initial buffer size in ACK_UNIT
     5(1): target type
           0: ipv4 addr, N=2+4
           1: ipv6 addr, N=2+16
@@ -89,10 +89,10 @@ synchronization. All integers are in network byte order.
             0: ack only, no data
             1: ack+data
           The rest is channel ID. 1 <= channel ID <= 126
-    1(1): ack size in 256 bytes
+    1(1): ack size in ACK_UNIT
     2(2): data size N (ommited if there is no data)
-          For ease of programming, we limit the size of all messages to 2000
-          bytes, so max(N)=1996.
+          For ease of programming, we limit the size of all messages to
+          MAX_MESSAGESIZE=8192 bytes, so max(N)=8188.
     4(N): data
     4+N
 * TRDN Channel Teardown
@@ -150,9 +150,19 @@ To prevent this, When a channel is estblished, two peers tell each other their
 receiving buffer size.  When the receiver's local socket consumes data, the
 receiver acks the sender by saying, "Hi, you can send me more data of size N".
 
-We don't need byte-level granularity like TCP.  The ack's unit is 256 bytes.
-For example, if the other peer sends ack 17, it means we can send 4352 more
-bytes.  This design limits the per channel throughput to at most buffsize/RTT.
+We don't need byte-level granularity like TCP.  The ack's unit is 4096 bytes
+(ACK_UNIT).  For example, if the other peer sends ack 17, it means we can send
+69632 more bytes.  This design limits the per channel throughput to at most
+buffsize/RTT.
+
+Choise of ACK_UNIT and MAX_MESSAGESIZE
+----
+If MAX_MESSAGESIZE is too small, the overhead in terms of system call, thread
+switch, message header will be too large. If MAX_MESSAGESIZE is too large, the
+latency can be large.
+
+If ACK_UNIT is too small, ack message needs to be sent too often. If ACK_UNIT
+is too large, TChannel's recvbuf need to be large as well.
 
 Speed throttling
 ----

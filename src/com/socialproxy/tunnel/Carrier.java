@@ -35,20 +35,16 @@ public class Carrier implements Runnable {
 	public static final byte CTRL_PING = 4;
 	public static final byte CTRL_PONG = 5;
 	public static final byte CTRL_PADD = 6;
-	public static final int ACK_UNIT = 256;
+	public static final int ACK_UNIT = 4096;
 	public static final int MAX_ACK = 255;
-	public static final int MAX_MESSAGESIZE = 2000;
+	public static final int MAX_MESSAGESIZE = 8192;
 	public static final int MAX_DATASIZE = MAX_MESSAGESIZE - 4;
-	private static final int CHANNEL_RECVBUF_SIZE = 256 * ACK_UNIT;
+	private static final int CHANNEL_RECVBUF_SIZE = 100 * ACK_UNIT;
 	private static final int CHANNEL_SENDBUF_SIZE = MAX_DATASIZE;
-	private static final int SELECT_TIMEOUT_MS = 500; // timeout in needed for speed limit
+	private static final int SELECT_TIMEOUT_MS = 500; // timeout is needed for speed limit
 	private final static Logger LOG = Logger.getLogger(Carrier.class.getName());
 	private static final Pattern PATTERN_IPV4 = Pattern.compile(
 			"([0-9]+)\\.([0-9]+)\\.([0-9]+)\\.([0-9]+)");
-//			"^([01]?\\d\\d?|2[0-4]\\d|25[0-5])\\." +
-//			"([01]?\\d\\d?|2[0-4]\\d|25[0-5])\\." +
-//			"([01]?\\d\\d?|2[0-4]\\d|25[0-5])\\." +
-//			"([01]?\\d\\d?|2[0-4]\\d|25[0-5])$");
 	private static final Pattern PATTERN_IPV6 = Pattern.compile(
 			"([0-9a-f]{1,4}:){7}([0-9a-f]){1,4}");
 	private static final Pattern PATTERN_DNSNAME = Pattern.compile(

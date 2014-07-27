@@ -8,6 +8,7 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import com.socialproxy.util.CircularByteBuffer;
 
@@ -56,13 +57,13 @@ public class TChannel implements Runnable
 
 		myUnsendAck = new AtomicInteger(0);
 		peerFreeRecvbuf = new AtomicInteger(peerRecvbufSize);
-		LOG.fine("TChannel()");
+		LOG.fine("TC" + channelID + " TChannel()");
 	}
 
 	/* called by carrier when it receives TRDN */
 	public void onTRDN ()
 	{
-		LOG.fine("onTRDN()");
+		LOG.fine("TC" + channelID + " onTRDN()");
 		closed = true;
 		selector.wakeup();
 	}
@@ -77,21 +78,21 @@ public class TChannel implements Runnable
 		synchronized (recvbuf) {
 			// the ack mechanism guarantees recvbuf has enough free space
 			if (recvbuf.getFree() < size) {
-				LOG.warning("recvbuf.getFree()=" + recvbuf.getFree() + " < datasize=" + size);
+				LOG.warning("TC" + channelID + " recvbuf.getFree()=" + recvbuf.getFree() + " < datasize=" + size);
 				closed = true;
 				selector.wakeup();
 				throw new CarrierProtocolException("receive buffer overflow");
 			} else {
 				int putsize = recvbuf.put(data, offset, size);
 				assert putsize == size;
-				LOG.finer("onDATA(size=" + size + ") " +
+				LOG.finer("TC" + channelID + " onDATA(size=" + size + ") " +
 						"new recvbuf:" + recvbuf.getUsed() +
 						"u/" + recvbuf.getFree() + "f");
 			}
 		}
 		if (ack > 0) {
 			int newvalue = peerFreeRecvbuf.addAndGet(ack);
-			LOG.finer("onDATA() ack=" + ack + ", new peerFreeRecvbuf=" + newvalue);
+			LOG.finer("TC" + channelID + " onDATA() ack=" + ack + ", new peerFreeRecvbuf=" + newvalue);
 		}
 		selector.wakeup();
 	}
@@ -101,7 +102,7 @@ public class TChannel implements Runnable
 	{
 		assert ack > 0;
 		int newvalue = peerFreeRecvbuf.addAndGet(ack);
-		LOG.finer("onAck() ack=" + ack + ", new peerFreeRecvbuf=" + newvalue);
+		LOG.finer("TC" + channelID + " onAck() ack=" + ack + ", new peerFreeRecvbuf=" + newvalue);
 		selector.wakeup();
 	}
 
@@ -119,7 +120,7 @@ public class TChannel implements Runnable
 			size = sendbuf.position();
 			sendbuf.compact();
 		}
-		LOG.finer("sendToCarrier() return " + size);
+		LOG.finer("TC" + channelID + " sendToCarrier() return " + size);
 		selector.wakeup();
 		return size;
 	}
@@ -137,7 +138,7 @@ public class TChannel implements Runnable
 			if (decrement == 0) break;
 			if (decrement > Carrier.MAX_ACK) decrement = Carrier.MAX_ACK;
 		} while (!myUnsendAck.compareAndSet(oldval, oldval - decrement * Carrier.ACK_UNIT));
-		LOG.finer("sendAckToCarrier() oldval=" + oldval + ", decrement=" + decrement + "*" + Carrier.ACK_UNIT);
+		LOG.finer("TC" + channelID + " sendAckToCarrier() oldval=" + oldval + ", decrement=" + decrement + "*" + Carrier.ACK_UNIT);
 		return decrement;
 	}
 
@@ -149,14 +150,17 @@ public class TChannel implements Runnable
 			int selops = 0;
 			if (peerFreeRecvbuf.get() > 0 && sendbuf.hasRemaining())
 				selops |= SelectionKey.OP_READ;
+			LOG.finer("TC" + channelID + " peerFreeRecvbuf=" +
+					peerFreeRecvbuf.get() + " sendbuf.remaining=" +
+					sendbuf.remaining());
 			if (!recvbuf.isEmpty())
 				selops |= SelectionKey.OP_WRITE;
 			selkey.interestOps(selops);
-			LOG.finer("selecting: " +
+			LOG.finer("TC" + channelID + " selecting " +
 					((selops & SelectionKey.OP_READ) == 0 ? "" : "r") +
 					((selops & SelectionKey.OP_WRITE) == 0 ? "" : "w"));
 			selector.select();
-			LOG.finer("selected " +
+			LOG.finer("TC" + channelID + " selected " +
 					(closed ? "c" : "") +
 					(selkey.isReadable() ? "r" : "") +
 					(selkey.isWritable() ? "w" : ""));
@@ -177,7 +181,7 @@ public class TChannel implements Runnable
 						if (sendbuf.remaining() > remaining)
 							sendbuf.limit(sendbuf.position() + remaining);
 						size = socket.read(sendbuf);
-						LOG.finer("read " + size + " bytes (limit=" + remaining + ") from local socket");
+						LOG.finer("TC" + channelID + " read " + size + " bytes (limit=" + remaining + ") from local socket");
 						sendbuf.limit(sendbuf.capacity());
 					}
 				}
@@ -198,11 +202,20 @@ public class TChannel implements Runnable
 					!recvbuf.isEmpty()) {
 				int size = 0;
 				synchronized (recvbuf) {
-					size = recvbuf.get(socket, -1);
-					LOG.finer("write " + size + " bytes to local socket");
+					try {
+						size = recvbuf.get(socket, -1);
+					} catch (IOException x) {
+						size = -1;
+						LOG.log(Level.INFO, "Exception while writing to local socket", x);
+					}
+					LOG.finer("TC" + channelID + " write " + size + " bytes to local socket");
 				}
-				assert size >= 0;
-				if (size > 0) {
+				if (size == -1) {
+					carrier.channelClose(channelID);
+					socket.close();
+					selector.close();
+					break;
+				} else if (size > 0) {
 					int newval = myUnsendAck.addAndGet(size);
 					// keep silent if recvbuf is %95 free
 					if (newval >= Carrier.ACK_UNIT && newval >= recvbuf.getSize() / 20)
