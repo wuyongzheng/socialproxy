@@ -105,7 +105,8 @@ public class TChannel implements Runnable
 		selector.wakeup();
 	}
 
-	/* return bytes transfered to dst.
+	/* called by carrier.
+	 * return bytes transfered to dst.
 	 * dst should have enough space. */
 	public int sendToCarrier (ByteBuffer dst)
 	{
@@ -119,23 +120,25 @@ public class TChannel implements Runnable
 			sendbuf.compact();
 		}
 		LOG.finer("sendToCarrier() return " + size);
+		selector.wakeup();
 		return size;
 	}
 
-	/* return ack in ACK_UNIT bytes */
+	/* called by carrier.
+	 * return ack in ACK_UNIT bytes */
 	public int sendAckToCarrier ()
 	{
 		int oldval;
-		int decrement;
+		int decrement; // in ACK_UNIT bytes
 		do {
 			oldval = myUnsendAck.get();
 			assert oldval >= 0;
-			decrement = (oldval / Carrier.ACK_UNIT) * Carrier.ACK_UNIT;
+			decrement = oldval / Carrier.ACK_UNIT;
 			if (decrement == 0) break;
 			if (decrement > Carrier.MAX_ACK) decrement = Carrier.MAX_ACK;
-		} while (!myUnsendAck.compareAndSet(oldval, oldval - decrement));
-		LOG.finer("sendAckToCarrier() oldval=" + oldval + ", decrement=" + decrement);
-		return decrement / Carrier.ACK_UNIT;
+		} while (!myUnsendAck.compareAndSet(oldval, oldval - decrement * Carrier.ACK_UNIT));
+		LOG.finer("sendAckToCarrier() oldval=" + oldval + ", decrement=" + decrement + "*" + Carrier.ACK_UNIT);
+		return decrement;
 	}
 
 	private void runInternal () throws Exception
@@ -153,8 +156,8 @@ public class TChannel implements Runnable
 					((selops & SelectionKey.OP_READ) == 0 ? "" : "r") +
 					((selops & SelectionKey.OP_WRITE) == 0 ? "" : "w"));
 			selector.select();
-			LOG.finer("selected: " +
-					(closed ? "" : "c") +
+			LOG.finer("selected " +
+					(closed ? "c" : "") +
 					(selkey.isReadable() ? "r" : "") +
 					(selkey.isWritable() ? "w" : ""));
 			if (closed) {
@@ -162,8 +165,10 @@ public class TChannel implements Runnable
 				selector.close();
 				break;
 			}
-			if (selkey.isReadable()) {
-				assert peerFreeRecvbuf.get() > 0;
+
+			if (selector.selectedKeys().size() == 1 &&
+					selkey.isReadable() &&
+					peerFreeRecvbuf.get() > 0) {
 				int size = 0;
 				synchronized (sendbuf) {
 					if (sendbuf.hasRemaining()) {
@@ -172,6 +177,7 @@ public class TChannel implements Runnable
 						if (sendbuf.remaining() > remaining)
 							sendbuf.limit(sendbuf.position() + remaining);
 						size = socket.read(sendbuf);
+						LOG.finer("read " + size + " bytes (limit=" + remaining + ") from local socket");
 						sendbuf.limit(sendbuf.capacity());
 					}
 				}
@@ -186,11 +192,14 @@ public class TChannel implements Runnable
 					carrier.channelSend(channelID);
 				}
 			}
-			if (selkey.isWritable()) {
+
+			if (selector.selectedKeys().size() == 1 &&
+					selkey.isWritable() &&
+					!recvbuf.isEmpty()) {
 				int size = 0;
 				synchronized (recvbuf) {
-					if (!recvbuf.isEmpty())
-						size = recvbuf.get(socket, -1);
+					size = recvbuf.get(socket, -1);
+					LOG.finer("write " + size + " bytes to local socket");
 				}
 				assert size >= 0;
 				if (size > 0) {

@@ -54,8 +54,10 @@ public class CarrierTool {
 		if (args[0].equals("server")) {
 			ServerSocketChannel serverSocket = ServerSocketChannel.open();
 			serverSocket.bind(new InetSocketAddress(Integer.parseInt(args[1])));
+			LOG.info("Lintening on port " + args[1]);
 			while (true) {
 				SocketChannel socket = serverSocket.accept();
+				LOG.info("Accepted connection");
 				carrier = new Carrier(socket, true, KEY_S2C, KEY_C2S);
 				carrier.run();
 				carrier = null;
@@ -63,6 +65,7 @@ public class CarrierTool {
 		} else {
 			SocketChannel socket = SocketChannel.open(
 					new InetSocketAddress(args[1], Integer.parseInt(args[2])));
+			LOG.info("Carrier Connected");
 			carrier = new Carrier(socket, false, KEY_C2S, KEY_S2C);
 			carrier.run();
 		}
@@ -96,11 +99,13 @@ public class CarrierTool {
 			serverSocket.bind(new InetSocketAddress(listenPort));
 			while (true) {
 				SocketChannel socket = serverSocket.accept();
+				LOG.info("Accepted local socket");
 				if (carrier == null) {
 					LOG.severe("local socket connected before carrier");
 					socket.close();
 				} else {
 					boolean succeed = carrier.createChannel(socket, remoteAddr, remotePort);
+					LOG.info("carrier.createChannel() " + (succeed ? "succeed" : "failed"));
 					if (!succeed)
 						socket.close();
 				}

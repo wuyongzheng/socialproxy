@@ -24,7 +24,7 @@ import com.socialproxy.util.Hex;
  * so the constructor expects the encryption & decryption keys.
  */
 public class Carrier implements Runnable {
-	private static final boolean LOGTRAFFIC = true;
+	private static final boolean LOGTRAFFIC = false;
 	public static final int STATE_EMPTY      = 0;
 	public static final int STATE_CONNECTING = 1;
 	public static final int STATE_CONNECTED  = 2;
@@ -39,8 +39,8 @@ public class Carrier implements Runnable {
 	public static final int MAX_ACK = 255;
 	public static final int MAX_MESSAGESIZE = 2000;
 	public static final int MAX_DATASIZE = MAX_MESSAGESIZE - 4;
-	public static final int CHANNEL_RECVBUF_SIZE = 256 * ACK_UNIT;
-	public static final int CHANNEL_SENDBUF_SIZE = MAX_DATASIZE;
+	private static final int CHANNEL_RECVBUF_SIZE = 256 * ACK_UNIT;
+	private static final int CHANNEL_SENDBUF_SIZE = MAX_DATASIZE;
 	private static final int SELECT_TIMEOUT_MS = 500; // timeout in needed for speed limit
 	private final static Logger LOG = Logger.getLogger(Carrier.class.getName());
 	private static final Pattern PATTERN_IPV4 = Pattern.compile(
@@ -122,9 +122,9 @@ public class Carrier implements Runnable {
 			} catch (IOException x) {
 				throw new RuntimeException(x);
 			}
-			LOG.finer("selected: " +
-					(selkey.isReadable() ? "r" : "") +
-					(selkey.isWritable() ? "w" : ""));
+			LOG.finer("selected " +
+					(selector.selectedKeys().size() == 1 && selkey.isReadable() ? "r" : "") +
+					(selector.selectedKeys().size() == 1 && selkey.isWritable() ? "w" : ""));
 
 			if (carrierClosed) {
 				LOG.info("closing carrier");
@@ -132,7 +132,7 @@ public class Carrier implements Runnable {
 				return;
 			}
 
-			if (selkey.isReadable()) {
+			if (selector.selectedKeys().size() == 1 && selkey.isReadable()) {
 				/* recvbuf layout:
 				 * | partial message (pos) freespace (limit,cap) | */
 				assert recvbuf.limit() == recvbuf.capacity();
@@ -192,7 +192,9 @@ public class Carrier implements Runnable {
 				}
 			}
 
-			if (selkey.isWritable() && sendbuf.position() > 0) {
+			if (selector.selectedKeys().size() == 1 &&
+					selkey.isWritable() &&
+					sendbuf.position() > 0) {
 				sendbuf.flip();
 				try {
 					int size = backsock.write(sendbuf);
@@ -244,8 +246,11 @@ public class Carrier implements Runnable {
 			return false;
 		}
 
-		int cid = isMajor ? 64 : 1;
-		while (cid <= (isMajor ? 126 : 63))
+		// TODO race
+		int cid;
+		for (cid = isMajor ? 64 : 1;
+				cid <= (isMajor ? 126 : 63);
+				cid ++)
 			if (slots[cid].state == STATE_EMPTY)
 				break;
 		if (cid > (isMajor ? 126 : 63)) {
@@ -597,7 +602,12 @@ public class Carrier implements Runnable {
 			slots[cid].hasAck = false;
 			int position = sendbuf.position();
 			sendbuf.position(position + 4);
-			int ack = slots[cid].channel.sendToCarrier(sendbuf);
+			int size = slots[cid].channel.sendToCarrier(sendbuf);
+			if (size == 0) { // this happens
+				sendbuf.position(position);
+				continue;
+			}
+			int ack = slots[cid].channel.sendAckToCarrier();
 			int position2 = sendbuf.position();
 			assert position2 > position + 4;
 			sendbuf.put(position+0, (byte)(128 + cid));

@@ -65,7 +65,10 @@ public final class CircularByteBuffer
 		if (bytebuf == null)
 			bytebuf = ByteBuffer.wrap(buffer);
 
-		if (limit <= 0 || used == 0)
+		assert limit >= -1;
+		if (limit == -1)
+			limit = used;
+		if (limit == 0 || used == 0)
 			return 0;
 		if (limit > used)
 			limit = used;
