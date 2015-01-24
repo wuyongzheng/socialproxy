@@ -1,4 +1,4 @@
-check http://bsnoop.come.in/trackers/
+check http://bsnoop.come/trackers/
 
 http://bt.mp4ba.com:2710/announce
 

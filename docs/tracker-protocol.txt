@@ -1,0 +1,58 @@
+Social proxy clients use bittorrent tracker to exchange IP information.
+
+Key Derivation
+----
+A pair
+of social proxy clients use Elliptic curve Diffie-Hellman to compute a shared
+root key K_r, which is used to derive other keys.
+
+K_p = HMAC(K_r, "period" | peer_protocol)
+K_e = HMAC(K_r, "epoch" | peer_protocol)
+K_i = HMAC(K_r, "peerid" | peer_protocol)
+K_t = HMAC(K_r, "tracker" | peer_protocol)
+
+Possible peer protocols are:
+* tcp
+* udp
+* udp
+
+Announce Protocol
+----
+Each client announce it's IP address and port to a list of BT trackers, similar
+to what typical BT clients do. The BT announce request requires the following
+information:
+
+* info_hash: The infohash of the announcement is periodically
+changed in order to mitigate censorship. The period is not constant but
+randomized within a range [2, 12], also in order to mitigate censorship. The
+[2, 12] range comes from typical PC's uptime.  If the current UNIX timestamp is
+T, the infohash is computed as following:
+
+let f(n) = sigma_{i=0}^n {mod(HMAC(K_p, i), 10*3600) + 7200},
+where sigma_{i=0}^n {g(i)} means g(0) + g(1) + ... + g(n),
+mod(h, n) treats h as a big integer and compute (h % n),
+then infohash(T) = HMAC(K_e, n) iff f(n) <= T and f(n+1) > T.
+n is call the epoch number.
+
+* peer_id: Peer ID is returned by (some) HTTP trackers, but not by UDP tracker.
+We use peer_id as a message signature. If we get incorrect peer_id from an HTTP
+tracker response, we discard the peer in the response. The peer_id is computed
+as following:
+HMAC(K_i, ip|port|n), where n is the epoch number.
+
+* ip/port: The public ip/port that the client is listening to.
+
+* uploaded/downloaded/left: Don't care. Try to mimic BT client's behaviour.
+Don't set `left` to 0 because tracker will not return a seeder to another
+seeder.
+
+List of Trackers
+----
+All social proxy clients use the same list of trackers. We should only include
+trackers that are:
+1. accessable from both inside and outside GFW.
+2. popular. The more the traffic, the harder the censorship.
+
+Different client pairs prioritize the list of trackers differently. The tracker
+priority is computed by sorting HMAC(K_t, tracker_id|n). `tracker_id` is used
+to identify mutiple URLs of one tracker.
