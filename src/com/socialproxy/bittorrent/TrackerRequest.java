@@ -27,4 +27,3 @@ public class TrackerRequest {
 		this.numwant = 0;
 	}
 }
-
