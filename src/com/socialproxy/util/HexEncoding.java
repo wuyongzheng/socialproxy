@@ -1,24 +1,25 @@
-package com.socialproxy.bittorrent;
+package com.socialproxy.util;
 
 public class HexEncoding
 {
 	final protected static char[] hexArray = "0123456789abcdef".toCharArray();
-	public static String bytesToHex (byte[] bytes, int offset, int length)
+	public static String bytesToString (byte[] bytes, int offset, int length)
 	{
 		char[] hexChars = new char[length * 2];
-		for ( int j = 0; j < length; j++ ) {
-			int v = bytes[offset+j] & 0xff;
+		for (int j = 0; j < length; j++) {
+			int v = bytes[offset + j] & 0xFF;
 			hexChars[j * 2] = hexArray[v >>> 4];
-			hexChars[j * 2 + 1] = hexArray[v & 0xf];
+			hexChars[j * 2 + 1] = hexArray[v & 0x0F];
 		}
 		return new String(hexChars);
 	}
-	public static String bytesToHex (byte[] bytes)
+
+	public static String bytesToString (byte[] bytes)
 	{
-		return bytesToHex(bytes, 0, bytes.length);
+		return bytesToString(bytes, 0, bytes.length);
 	}
 
-	public static byte[] hexToBytes (String hex)
+	public static byte[] stringToBytes (String hex)
 	{
 		byte [] bytes = new byte [hex.length()/2];
 		for (int i = 0; i < bytes.length; i++) {

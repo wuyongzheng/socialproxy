@@ -6,15 +6,15 @@ import java.nio.*;
 import java.util.*;
 import java.util.logging.*;
 import java.nio.channels.*;
+import com.socialproxy.util.*;
 
-public class UDPTrackerClient implements Runnable
+public class UDPTrackerClient extends Thread
 {
 	private final static Logger LOG = Logger.getLogger(UDPTrackerClient.class.getName());
 	private final static Random random = new Random();
 	private static UDPTrackerClient instance;
 	private final Selector selector;
 	private final DatagramChannel socket;
-	private final Thread thread;
 	private final HashMap<Integer, Session> sessions = new HashMap<Integer, Session>();
 
 	/* no public constructor */
@@ -24,11 +24,11 @@ public class UDPTrackerClient implements Runnable
 			socket = DatagramChannel.open();
 			socket.bind(null);
 			int port = socket.socket().getLocalPort();
-			socket.configureBlocking(true);
+			socket.configureBlocking(false);
 			selector = Selector.open();
 			socket.register(selector, SelectionKey.OP_READ);
-			thread = new Thread(this, "udptc" + port);
-			thread.start();
+			setName("udptc" + port);
+			start();
 		} catch (IOException x) {
 			throw new RuntimeException(x);
 		}
@@ -61,6 +61,8 @@ public class UDPTrackerClient implements Runnable
 			try {
 				selector.select(sessions.isEmpty() ? 0 : random.nextInt(2000) + 4000);
 			} catch (IOException x) {
+				LOG.log(Level.SEVERE, "Unexpected IOException in selector.select", x);
+				return;
 			}
 
 			/* Step 1: process response */
@@ -68,7 +70,8 @@ public class UDPTrackerClient implements Runnable
 			try {
 				addr = socket.receive(buffer);
 			} catch (IOException x) {
-				throw new RuntimeException(x);
+				LOG.log(Level.SEVERE, "Unexpected IOException in socket.receive", x);
+				return;
 			}
 			if (addr != null) {
 				buffer.flip();
@@ -97,6 +100,15 @@ public class UDPTrackerClient implements Runnable
 				for (Session session : toDelete)
 					sessions.remove(session.transID);
 		}
+	}
+
+	/* ipint is returned from Butebuffer.getInt() in BIG_ENDIAN */
+	public static String ipIntToString (int ipint)
+	{
+		return (ipint >>> 24) + "." +
+			((ipint >>> 16) & 0xff) + "." +
+			((ipint >>> 8) & 0xff) + "." +
+			(ipint & 0xff);
 	}
 
 	public static byte [] ipDotStringToBytes (String dotNotation)
@@ -147,6 +159,10 @@ public class UDPTrackerClient implements Runnable
 		}
 
 		buffer.flip();
+		if (LOG.isLoggable(Level.FINEST)) {
+			String hex = HexEncoding.bytesToString(buffer.array(), buffer.position(), buffer.remaining());
+			LOG.finest("Sending: " + hex);
+		}
 		try {
 			int sent = socket.send(buffer, session.tracker);
 			if (sent == 0) {
@@ -156,12 +172,17 @@ public class UDPTrackerClient implements Runnable
 				session.lastSendTime = System.currentTimeMillis();
 			}
 		} catch (IOException x) {
-			throw new RuntimeException(x);
+			LOG.log(Level.SEVERE, "Unexpected IOException in socket.send", x);
 		}
 	}
 
 	private void doReceive (SocketAddress addr, ByteBuffer buffer)
 	{
+		if (LOG.isLoggable(Level.FINEST)) {
+			String hex = HexEncoding.bytesToString(buffer.array(), buffer.position(), buffer.remaining());
+			LOG.finest("Received: " + hex);
+		}
+
 		if (buffer.remaining() < 8) {
 			LOG.info("response size too small " + buffer.limit() + ". ignored.");
 			return;
@@ -203,10 +224,6 @@ public class UDPTrackerClient implements Runnable
 					LOG.info("bad transID");
 					break;
 				}
-				if (buffer.remaining() < 12) {
-					LOG.info("short announce response");
-					break;
-				}
 				doReceiveAnnounce(session, buffer);
 				break;
 			case 3: // error
@@ -233,16 +250,33 @@ public class UDPTrackerClient implements Runnable
 
 	private void doReceiveAnnounce (Session session, ByteBuffer buffer)
 	{
+		if (buffer.remaining() < 12) {
+			LOG.info("short announce response");
+			return;
+		}
+
+		int interval = buffer.getInt();
+		int leechers = buffer.getInt();
+		int seeders = buffer.getInt();
+		TrackerResponse.Peer [] peers = new TrackerResponse.Peer [buffer.remaining() / 6];
+		for (int i = 0; i < peers.length; i ++)
+			peers[i] = new TrackerResponse.Peer(null, ipIntToString(buffer.getInt()), buffer.getShort() & 0xffff);
+		TrackerResponse response = new TrackerResponse(
+				null, interval, leechers, seeders, peers);
+		session.listener.onResponse(response);
+		sessions.remove(session.transID);
 	}
 
 	private static class Session {
+		/* transID+0: connect request/response
+		 * transID+1: announce request/response */
 		public final int transID = random.nextInt(1<<28) * 4;
 		public final TrackerRequest request;
 		public final InetSocketAddress tracker;
 		public final TrackerResponseListener listener;
 		public static final int EXPECT_NONE = 0;
-		public static final int EXPECT_CONNECT = 0;
-		public static final int EXPECT_ANNOUNCE = 0;
+		public static final int EXPECT_CONNECT = 1;
+		public static final int EXPECT_ANNOUNCE = 2;
 		public int expect; // what responce are we waiting?
 		public long lastSendTime; // System.currentTimeMillis()
 		public int retryCount;
