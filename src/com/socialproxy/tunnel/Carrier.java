@@ -14,7 +14,7 @@ import java.util.regex.Matcher;
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 import javax.crypto.spec.IvParameterSpec;
-import com.socialproxy.util.Hex;
+import com.socialproxy.util.HexEncoding;
 
 /* A carrier can carry mutiple tunneled channels.
  * It acts as a multiplexer bewteen multiple channels (frontend)
@@ -332,7 +332,7 @@ public class Carrier implements Runnable {
 			}
 		}
 		if (LOGTRAFFIC && recvbuf.position() > 0)
-			LOG.finest("RECV: " + Hex.bytesToString(recvbuf.array(),
+			LOG.finest("RECV: " + HexEncoding.bytesToString(recvbuf.array(),
 						0, recvbuf.position()));
 	}
 
@@ -572,7 +572,7 @@ public class Carrier implements Runnable {
 		}
 
 		if (LOGTRAFFIC && sendbuf.position() > mark)
-			LOG.finest("SEND: " + Hex.bytesToString(sendbuf.array(),
+			LOG.finest("SEND: " + HexEncoding.bytesToString(sendbuf.array(),
 						mark, sendbuf.position() - mark));
 
 		while (sendbuf.remaining() >= MAX_MESSAGESIZE && hasAnyData) {
@@ -611,7 +611,7 @@ public class Carrier implements Runnable {
 			sendbuf.putShort(position+2, (short)(position2 - position - 4));
 			if (LOGTRAFFIC)
 				LOG.finest("SEND DATA " +
-						Hex.bytesToString(sendbuf.array(), position, 4) +
+						HexEncoding.bytesToString(sendbuf.array(), position, 4) +
 						" " + (position2 - position - 4));
 		}
 	}

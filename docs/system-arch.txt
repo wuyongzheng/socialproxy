@@ -1,0 +1,32 @@
+System Architecture
+====
+
+The socialproxy consists of the following components:
+
+GUI/TUI
+----
+The program entry point. Create socialproxy core and handle UI.
+
+Core
+----
+Initialize all components except UI.
+
+Local Listen Socket
+----
+Listens to local HTTP proxy or SOCKS ports, and pass connection to carrier
+
+Carrier
+----
+Handles connections between this socialproxy client and other peers
+
+TrackerManaher
+----
+Announce this client's public Carrier listen address and get peer's address
+
+HTTP Proxy Server
+----
+Standard HTTP Proxy Server, nothing else to say
+
+SOCKS Proxy Server
+----
+Standard SOCKS Proxy Server, nothing else to say
