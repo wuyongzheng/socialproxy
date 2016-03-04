@@ -9,24 +9,23 @@ The program entry point. Create socialproxy core and handle UI.
 
 Core
 ----
-Initialize all components except UI.
+TODO
 
-Local Listen Socket
-----
-Listens to local HTTP proxy or SOCKS ports, and pass connection to carrier
-
-Carrier
+Router
 ----
 Handles connections between this socialproxy client and other peers
 
-TrackerManaher
+TrackerClient
 ----
-Announce this client's public Carrier listen address and get peer's address
+Announce this client's router listen address and get peer's address
 
-HTTP Proxy Server
+Entry Web Proxy
 ----
-Standard HTTP Proxy Server, nothing else to say
+Listens to local port and accepts local web browser's connection.
+Implements SOCKS5 protocol.
+Sits between browser and router.
 
-SOCKS Proxy Server
+Exit Proxy
 ----
-Standard SOCKS Proxy Server, nothing else to say
+Serves other peer's web traffic.
+Sits between router and website.

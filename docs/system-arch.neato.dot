@@ -1,0 +1,17 @@
+graph G {
+router [label="Router"];
+router2 [label="Remote Peer's Router"];
+internet1 [label="Internet"];
+internet2 [label="Internet"];
+entryproxy [label="Entry Proxy"];
+exitproxy [label="Exit Proxy"];
+browser [label="Browser"];
+website [label="Website"];
+trackerclient [label="BitTorrent Tracker Client"];
+tracker [label="BitTorrent Tracker"];
+
+router -- internet1 -- router2;
+browser -- entryproxy -- router;
+router -- exitproxy -- website;
+router -- trackerclient -- internet2 -- tracker;
+}
